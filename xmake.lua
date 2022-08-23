@@ -45,7 +45,7 @@ target("quickjs")
         if not os.exists("libquickjs.a") then
             cprint("${green bright}(vendor) ${clear}build ${magenta bright}quickjs ${clear} ...")
             os.execv("sed", {"s/CFLAGS=\\-g/CFLAGS=\\-fPIC \\-g/g", "Makefile"}, {stdout = "Makefile.fpic"})
-            os.execv("make", {"-f", "Makefile.fpic"})
+            os.execv("make", {"-f", "Makefile.fpic", "-j", "4", "libquickjs.a"})
             -- os.execv("make", {"-f", "Makefile.fpic", "install"})
         end
         os.cd(old)
