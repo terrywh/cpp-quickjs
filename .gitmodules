@@ -1,0 +1,6 @@
+[submodule "vendor/gsl"]
+	path = vendor/gsl
+	url = https://github.com/microsoft/GSL.git
+[submodule "vendor/quickjs"]
+	path = vendor/quickjs
+	url = https://github.com/bellard/quickjs.git
