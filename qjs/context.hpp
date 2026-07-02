@@ -20,11 +20,11 @@ public:
         : runtime_(nullptr), context_(ctx), cpp_error_ctor_(nullptr)
     {
         if (ctx == nullptr) {
-            detail::throw_error("QuickJS context pointer is null");
+            throw_error("QuickJS context pointer is null");
         }
         auto* owner = static_cast<context_ref*>(JS_GetContextOpaque(ctx));
         if (owner == nullptr) {
-            detail::throw_error("QuickJS context opaque pointer is not installed");
+            throw_error("QuickJS context opaque pointer is not installed");
         }
         runtime_ = owner->runtime_;
         cpp_error_ctor_ = owner->cpp_error_ctor_;
@@ -76,7 +76,7 @@ public:
     {
         value v(*this, JS_NewObject(context_));
         if (v.is_exception()) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         return v;
     }
@@ -85,7 +85,7 @@ public:
     {
         value v(*this, JS_NewArray(context_));
         if (v.is_exception()) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         return v;
     }
@@ -102,7 +102,7 @@ public:
     {
         value res(*this, JS_NewStringLen(context_, v.data(), v.size()));
         if (res.is_exception()) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         return res;
     }
@@ -159,7 +159,7 @@ public:
     void set(const char* name, value v)
     {
         if (JS_SetPropertyStr(context_, global().raw(), name, v.release()) < 0) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
     }
 
@@ -181,13 +181,13 @@ public:
     // Raise a JS exception in this context that mirrors a `qjs::error`. The
     // returned raw handle is `JS_EXCEPTION` (QuickJS' pending-exception
     // sentinel) — native trampolines return it verbatim to signal failure.
-    // On the JS side the thrown object is a `CppError` (a subclass of the
+    // On the JS side the thrown object is a `NativeError` (a subclass of the
     // built-in `Error`), so scripts identify wrapper-originated failures via
-    // `err instanceof CppError`.
+    // `err instanceof NativeError`.
     JSValue throw_cpp_error(const error& err)
     {
         try {
-            value js_error = make_cpp_error(err);
+            value js_error = make_error(err);
             return JS_Throw(context_, js_error.release());
         } catch (...) {
             // Fallback: if constructing the structured error itself fails
@@ -218,7 +218,7 @@ private:
             heap_function));
         if (v.is_exception()) {
             delete heap_function;
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         return v;
     }
@@ -297,7 +297,7 @@ private:
             def.class_name = class_name<T>().c_str();
             def.finalizer = &object_finalizer<T>;
             if (JS_NewClass(raw_runtime(), id, &def) < 0) {
-                detail::throw_error("JS_NewClass failed for " + class_name<T>());
+                throw_error("JS_NewClass failed for " + class_name<T>());
             }
         }
         return id;
@@ -316,7 +316,7 @@ private:
     void ensure_context(value_view v) const
     {
         if (v.ctx() != context_) {
-            detail::throw_error("QuickJS value belongs to a different context");
+            throw_error("QuickJS value belongs to a different context");
         }
     }
 
@@ -331,7 +331,7 @@ private:
             }
             return result.release();
         } catch (const exception& err) {
-            return context_ref(ctx).throw_cpp_error(err.info());
+            return context_ref(ctx).throw_cpp_error(err);
         } catch (const std::exception& err) {
             return context_ref(ctx).throw_cpp_error(
                 error{err.what(), std::source_location::current()});
@@ -341,60 +341,50 @@ private:
         }
     }
 
-    // Build a JS `CppError` instance (subclass of `Error`) that mirrors the
+    // Build a JS `NativeError` instance (subclass of `Error`) that mirrors the
     // fields of `qjs::error`. Called only from throw_cpp_error(); it does
     // NOT install a pending exception on the JS side by itself.
-    value make_cpp_error(const error& err)
+    value make_error(const error& err)
     {
         ensure_cpp_error_ctor();
 
-        // `new CppError(message)` — inherits from Error, so `instanceof Error`
-        // and `instanceof CppError` both hold, and QuickJS auto-populates
+        // `new NativeError(message)` — inherits from Error, so `instanceof Error`
+        // and `instanceof NativeError` both hold, and QuickJS auto-populates
         // `.stack` with the JS-side backtrace.
         std::string message = err.message;
         JSValue msg_raw = JS_NewStringLen(context_, message.data(), message.size());
         if (JS_IsException(msg_raw)) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         JSValue argv[1] = { msg_raw };
         JSValue instance_raw = JS_CallConstructor(context_, cpp_error_ctor_->raw(), 1, argv);
         JS_FreeValue(context_, msg_raw);
         if (JS_IsException(instance_raw)) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         value instance(*this, instance_raw);
 
         // Attach structured metadata; use plain string properties so JS code
         // can read them without extra decoding.
-        instance.set("fileName", make_string(err.location.file_name()));
-        instance.set("lineNumber", make_integer(static_cast<std::int64_t>(err.location.line())));
-        instance.set("columnNumber", make_integer(static_cast<std::int64_t>(err.location.column())));
-        instance.set("functionName", make_string(err.location.function_name()));
+        std::ostringstream cpp_location;
+        cpp_location << err.at.function_name() << " @ "
+            << err.at.file_name() << ":" << err.at.line();
+        instance.set("cpp_location", make_string(cpp_location.view()));
 
 #if QJS_CPP_WRAPPER_HAS_STACKTRACE
         // Serialise the C++ stack once and expose it verbatim as `cppStack`,
         // then splice it in front of QuickJS' native `stack` so a single
         // `err.stack` read returns both C++ and JS frames (option B).
-        std::ostringstream cpp_stack_stream;
-        cpp_stack_stream << err.stacktrace;
-        std::string cpp_stack = std::move(cpp_stack_stream).str();
-        instance.set("cppStack", make_string(cpp_stack));
-
-        value existing_stack = instance.get("stack");
-        std::string combined = "C++ stack:\n" + cpp_stack;
-        if (existing_stack.is_string()) {
-            combined += "\nJS stack:\n";
-            combined += existing_stack.to_string();
-        }
-        instance.set("stack", make_string(combined));
+        std::ostringstream cpp_stack;
+        cpp_stack << err.stacktrace;
+        instance.set("cpp_stack", make_string(cpp_stack.view()));
 #endif
-
         return instance;
     }
 
-    // Bootstrap and cache the `CppError` constructor for this context. The
-    // class is also exposed as `globalThis.CppError` so scripts can perform
-    // `err instanceof CppError` in any scope.
+    // Bootstrap and cache the `NativeError` constructor for this context. The
+    // class is also exposed as `globalThis.NativeError` so scripts can perform
+    // `err instanceof NativeError` in any scope.
     void ensure_cpp_error_ctor()
     {
         if (!cpp_error_ctor_->is_undefined()) {
@@ -404,21 +394,21 @@ private:
         // assigning it to globalThis makes the identifier reachable to user
         // scripts running under this context.
         static constexpr std::string_view bootstrap =
-            "globalThis.CppError = class CppError extends Error {"
+            "globalThis.NativeError = class NativeError extends Error {"
             "  constructor(message) {"
             "    super(message);"
-            "    this.name = 'CppError';"
+            "    this.name = 'NativeError';"
             "  }"
             "};"
-            "globalThis.CppError";
+            "globalThis.NativeError";
         value ctor(*this, JS_Eval(
             context_,
             bootstrap.data(),
             bootstrap.size(),
-            "<qjs:CppError>",
+            "<qjs:NativeError>",
             JS_EVAL_TYPE_GLOBAL));
         if (ctor.is_exception()) {
-            detail::throw_error(exception_string());
+            throw_error(exception_string());
         }
         *cpp_error_ctor_ = std::move(ctor);
     }
@@ -440,7 +430,7 @@ public:
         : context_ref(&rt, JS_NewContext(rt.raw()), &cpp_error_ctor_storage_)
     {
         if (context_ == nullptr) {
-            detail::throw_error("JS_NewContext failed");
+            throw_error("JS_NewContext failed");
         }
         JS_SetContextOpaque(context_, static_cast<context_ref*>(this));
     }
@@ -464,10 +454,10 @@ public:
     }
 
 private:
-    // Lazily-populated cache of the JS `CppError` constructor used to bridge
+    // Lazily-populated cache of the JS `NativeError` constructor used to bridge
     // C++ exceptions into the JS side (see ensure_cpp_error_ctor()). Kept
     // per-context so that multiple contexts sharing a runtime each own their
-    // own CppError class object.
+    // own NativeError class object.
     value cpp_error_ctor_storage_{};
 };
 

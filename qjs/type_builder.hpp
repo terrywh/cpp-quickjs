@@ -120,10 +120,10 @@ private:
                 JS_CFUNC_constructor,
                 0));
             if (constructor.is_exception()) {
-                detail::throw_error(context_->exception_string());
+                qjs::throw_error(context_->exception_string());
             }
             if (JS_SetConstructor(context_->raw(), constructor.raw(), prototype_.raw()) < 0) {
-                detail::throw_error(context_->exception_string());
+                qjs::throw_error(context_->exception_string());
             }
             return constructor;
         } else {
@@ -142,7 +142,7 @@ private:
         value fn = context_->make_function_impl(name, [ctx](call_args args) -> value {
             T* object = ctx->template opaque_this<T>(args.this_value().raw());
             if (object == nullptr) {
-                detail::throw_error("JS method called with incompatible this object");
+                qjs::throw_error("JS method called with incompatible this object");
             }
             return invoke_member<MemberFunction>(*ctx, *object, args);
         }, 0);
@@ -156,7 +156,7 @@ private:
         auto getter = [ctx, member](call_args args) -> value {
             T* object = ctx->template opaque_this<T>(args.this_value().raw());
             if (object == nullptr) {
-                detail::throw_error("JS getter called with incompatible this object");
+                qjs::throw_error("JS getter called with incompatible this object");
             }
             return ctx->make_value(object->*member);
         };
@@ -165,7 +165,7 @@ private:
         std::string owned_name{name};
         JSAtom atom = JS_NewAtomLen(context_->raw(), owned_name.data(), owned_name.size());
         if (atom == JS_ATOM_NULL) {
-            detail::throw_error(context_->exception_string());
+            qjs::throw_error(context_->exception_string());
         }
         int rc = JS_DefinePropertyGetSet(
             context_->raw(),
@@ -176,7 +176,7 @@ private:
             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(context_->raw(), atom);
         if (rc < 0) {
-            detail::throw_error(context_->exception_string());
+            qjs::throw_error(context_->exception_string());
         }
     }
 
@@ -195,7 +195,7 @@ private:
         using return_type = typename traits::return_type;
 
         if (args.size() < sizeof...(I)) {
-            detail::throw_error("JS method received too few arguments");
+            qjs::throw_error("JS method received too few arguments");
         }
 
         if constexpr (std::same_as<return_type, void>) {
@@ -212,7 +212,7 @@ private:
             context_ref c(ctx);
             return c.make_object(std::make_unique<T>()).release();
         } catch (const exception& err) {
-            return context_ref(ctx).throw_cpp_error(err.info());
+            return context_ref(ctx).throw_cpp_error(err);
         } catch (const std::exception& err) {
             return context_ref(ctx).throw_cpp_error(
                 error{err.what(), std::source_location::current()});
@@ -245,7 +245,7 @@ inline value context_ref::make_object(const T& object)
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
-        detail::throw_error(exception_string());
+        qjs::throw_error(exception_string());
     }
     JS_SetOpaque(v.raw(), new value_holder<T>(object));
     return v;
@@ -259,7 +259,7 @@ inline value context_ref::make_object(T&& object)
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
-        detail::throw_error(exception_string());
+        qjs::throw_error(exception_string());
     }
     JS_SetOpaque(v.raw(), new value_holder<T>(std::move(object)));
     return v;
@@ -271,7 +271,7 @@ inline value context_ref::make_object(std::shared_ptr<T> object)
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
-        detail::throw_error(exception_string());
+        qjs::throw_error(exception_string());
     }
     JS_SetOpaque(v.raw(), new shared_holder<std::shared_ptr<T>>(std::move(object)));
     return v;
@@ -283,7 +283,7 @@ inline value context_ref::make_object(std::unique_ptr<T, D> object)
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
-        detail::throw_error(exception_string());
+        qjs::throw_error(exception_string());
     }
     JS_SetOpaque(v.raw(), new unique_holder<std::unique_ptr<T, D>>(std::move(object)));
     return v;
@@ -303,7 +303,7 @@ inline value invoke_free_function_impl(context_ref& ctx, call_args args, std::in
     using return_type = typename traits::return_type;
 
     if (args.size() < sizeof...(I)) {
-        throw_error("JS function received too few arguments");
+        qjs::throw_error("JS function received too few arguments");
     }
 
     if constexpr (std::same_as<return_type, void>) {
@@ -357,7 +357,7 @@ inline value context_ref::make_value(T&& v)
         return std::forward<T>(v);
     } else if constexpr (std::same_as<U, value_view>) {
         if (v.ctx() != context_) {
-            detail::throw_error("QuickJS value belongs to a different context");
+            qjs::throw_error("QuickJS value belongs to a different context");
         }
         return value(*this, JS_DupValue(context_, v.raw()));
     } else if constexpr (std::same_as<U, std::string>) {

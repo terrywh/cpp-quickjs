@@ -109,6 +109,8 @@ using stacktrace = boost::stacktrace::stacktrace;
 // default member initialiser (`stacktrace{}`) keeps compiling unchanged, and
 // its stream operator prints an explicit "disabled" marker for logs.
 struct stacktrace {
+    stacktrace() = default;
+    stacktrace(std::size_t skip, std::size_t max_depth) {}
     friend std::ostream& operator<<(std::ostream& os, const stacktrace&) {
         return os << "<stacktrace disabled at build time>";
     }

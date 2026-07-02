@@ -19,7 +19,7 @@ inline context_ref& call_args::ctx() const noexcept
 inline value_view call_args::operator[](std::size_t index) const
 {
     if (index >= size()) {
-        detail::throw_error("QuickJS callback argument index is out of range");
+        throw_error("QuickJS callback argument index is out of range");
     }
     return value_view(context_->raw(), argv_[index]);
 }
@@ -35,7 +35,7 @@ inline value value::get(std::string_view name) const
     context_ref ctx(ctx_);
     value v(ctx, JS_GetPropertyStr(ctx_, value_, owned_name.c_str()));
     if (v.is_exception()) {
-        detail::throw_error(ctx.exception_string());
+        throw_error(ctx.exception_string());
     }
     return v;
 }
@@ -44,7 +44,7 @@ inline void value::set(const char* name, value v)
 {
     context_ref ctx(ctx_);
     if (JS_SetPropertyStr(ctx_, value_, name, v.release()) < 0) {
-        detail::throw_error(ctx.exception_string());
+        throw_error(ctx.exception_string());
     }
 }
 
@@ -77,7 +77,7 @@ inline value value::call(value_view this_value, Args&&... args) const
 
     value result(ctx, JS_Call(ctx_, value_, this_value.raw(), static_cast<int>(raw_args.size()), raw_args.data()));
     if (result.is_exception()) {
-        detail::throw_error(ctx.exception_string());
+        throw_error(ctx.exception_string());
     }
     return result;
 }
@@ -100,7 +100,7 @@ inline bool value::equals_loose(value_view other) const
     ensure_same_context(other);
     int r = JS_IsEqual(ctx_, value_, other.raw());
     if (r < 0) {
-        detail::throw_error(context_ref(ctx_).exception_string());
+        throw_error(context_ref(ctx_).exception_string());
     }
     return r != 0;
 }
@@ -118,25 +118,25 @@ inline T value_view::as() const
     if constexpr (std::same_as<U, std::int32_t> || std::same_as<U, int>) {
         std::int32_t out{};
         if (JS_ToInt32(ctx_, &out, value_) < 0) {
-            detail::throw_error(context_ref(ctx_).exception_string());
+            throw_error(context_ref(ctx_).exception_string());
         }
         return static_cast<T>(out);
     } else if constexpr (std::same_as<U, std::int64_t>) {
         std::int64_t out{};
         if (JS_ToInt64(ctx_, &out, value_) < 0) {
-            detail::throw_error(context_ref(ctx_).exception_string());
+            throw_error(context_ref(ctx_).exception_string());
         }
         return out;
     } else if constexpr (std::same_as<U, double>) {
         double out{};
         if (JS_ToFloat64(ctx_, &out, value_) < 0) {
-            detail::throw_error(context_ref(ctx_).exception_string());
+            throw_error(context_ref(ctx_).exception_string());
         }
         return out;
     } else if constexpr (std::same_as<U, bool>) {
         int out = JS_ToBool(ctx_, value_);
         if (out < 0) {
-            detail::throw_error(context_ref(ctx_).exception_string());
+            throw_error(context_ref(ctx_).exception_string());
         }
         return out != 0;
     } else if constexpr (std::same_as<U, std::string>) {

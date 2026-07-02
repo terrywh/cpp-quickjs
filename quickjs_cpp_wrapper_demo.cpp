@@ -1,3 +1,4 @@
+#include "qjs/error.hpp"
 #include "qjs/qjs.hpp"
 
 #include <iostream>
@@ -162,18 +163,16 @@ int main()
         std::string prim_greeting = ctx.eval("greeting").as<std::string>();
         bool prim_flag = ctx.eval("flag").as<bool>();
 
-        // C++ exception -> JS `CppError` (subclass of Error). JS-side code
-        // identifies wrapper-originated failures via `instanceof CppError`.
+        // C++ exception -> JS `NativeError` (subclass of Error). JS-side code
+        // identifies wrapper-originated failures via `instanceof NativeError`.
         ctx.set("nativeThrow", ctx.make_function(
             [](qjs::call_args) -> qjs::value {
-                throw qjs::exception(qjs::error{
-                    "boom-from-native",
-                    std::source_location::current()});
+                qjs::throw_error("boom-from-native");
             }));
 
         bool cpp_err_is_cpp_error = ctx.eval(
             "(() => { try { nativeThrow(); return false; }"
-            "         catch (e) { return e instanceof CppError; } })()").as<bool>();
+            "         catch (e) { return e instanceof NativeError; } })()").as<bool>();
         bool native_throw_has_virtual_name = ctx.eval(
             "/^closure_\\d{6,}$/.test(nativeThrow.name)").as<bool>();
         bool cpp_err_is_error = ctx.eval(
@@ -185,23 +184,22 @@ int main()
         std::string cpp_err_message = ctx.eval(
             "(() => { try { nativeThrow(); return ''; }"
             "         catch (e) { return e.message; } })()").as<std::string>();
-        bool cpp_err_has_filename = ctx.eval(
+        bool cpp_err_has_location = ctx.eval(
             "(() => { try { nativeThrow(); return false; }"
-            "         catch (e) { return typeof e.fileName === 'string' && e.fileName.length > 0; } })()").as<bool>();
-        bool cpp_err_has_line = ctx.eval(
+            "         catch (e) { return typeof e.cpp_location === 'string' && e.cpp_location.length > 0; } })()").as<bool>();
+        // With stacktrace enabled C++ frames are exposed as `cpp_stack`; the
+        // inherited `stack` from Error must also be a non-empty string.
+        bool cpp_err_has_cpp_stack = ctx.eval(
             "(() => { try { nativeThrow(); return false; }"
-            "         catch (e) { return Number.isInteger(e.lineNumber) && e.lineNumber > 0; } })()").as<bool>();
-        // With stacktrace enabled the C++ frames are spliced ahead of the JS
-        // stack (option B); we can't require any specific frame contents but
-        // the `stack` property must at least be a non-empty string.
+            "         catch (e) { return typeof e.cpp_stack === 'string' && e.cpp_stack.length > 0; } })()").as<bool>();
         bool cpp_err_has_stack = ctx.eval(
             "(() => { try { nativeThrow(); return false; }"
             "         catch (e) { return typeof e.stack === 'string' && e.stack.length > 0; } })()").as<bool>();
-        // A regular JS-side Error must NOT satisfy `instanceof CppError`, so
+        // A regular JS-side Error must NOT satisfy `instanceof NativeError`, so
         // the type check discriminates C++-originated failures precisely.
         bool js_err_not_cpp_error = ctx.eval(
             "(() => { try { throw new Error('js-only'); }"
-            "         catch (e) { return !(e instanceof CppError) && (e instanceof Error); } })()").as<bool>();
+            "         catch (e) { return !(e instanceof NativeError) && (e instanceof Error); } })()").as<bool>();
 
         // JS exception -> C++ `qjs::exception`. Embedders can catch script
         // failures on the C++ side and inspect the captured message.
@@ -211,7 +209,7 @@ int main()
             (void)ctx.eval("throw new Error('boom-from-js')");
         } catch (const qjs::exception& err) {
             caught_js_exception = true;
-            js_exception_message = err.info().message;
+            js_exception_message = err.message;
         }
 
         // Opt-in reflection: only members carrying `[[=qjs::expose{}]]` reach
@@ -267,8 +265,8 @@ int main()
             prim_greeting == "hello" && prim_flag;
         bool cpp_error_checks =
             cpp_err_is_cpp_error && cpp_err_is_error &&
-            cpp_err_name == "CppError" && cpp_err_message == "boom-from-native" &&
-            cpp_err_has_filename && cpp_err_has_line &&
+            cpp_err_name == "NativeError" && cpp_err_message == "boom-from-native" &&
+            cpp_err_has_location && cpp_err_has_cpp_stack &&
             cpp_err_has_stack && js_err_not_cpp_error &&
             native_throw_has_virtual_name &&
             caught_js_exception && js_exception_message.contains("boom-from-js");

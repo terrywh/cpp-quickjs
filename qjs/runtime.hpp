@@ -11,7 +11,7 @@ public:
         : runtime_(JS_NewRuntime())
     {
         if (runtime_ == nullptr) {
-            detail::throw_error("JS_NewRuntime failed");
+            throw_error("JS_NewRuntime failed");
         }
     }
 

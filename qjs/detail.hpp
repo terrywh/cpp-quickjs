@@ -28,13 +28,6 @@ inline std::string copy_c_string(JSContext* ctx, const char* text)
     return out;
 }
 
-[[noreturn]] inline void throw_error(
-    std::string message,
-    std::source_location location = std::source_location::current())
-{
-    throw exception(error{std::move(message), location});
-}
-
 template <typename T>
 struct member_pointer_traits;
 

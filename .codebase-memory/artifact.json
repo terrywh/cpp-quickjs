@@ -1,0 +1,11 @@
+{
+    "schema_version": 1,
+    "commit": "8dce5a8b5089b5fe989bd536106fe076a8f2fbeb",
+    "indexed_at": "2026-07-02T06:10:31Z",
+    "project": "data-workspace-git.woa.com-terryhaowu-cpp_demo",
+    "nodes": 234,
+    "edges": 598,
+    "original_size": 1703936,
+    "compressed_size": 189620,
+    "compression_level": 9
+}

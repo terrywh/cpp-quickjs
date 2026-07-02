@@ -156,7 +156,7 @@ private:
     void ensure_same_context(value_view other) const
     {
         if (ctx_ != other.ctx()) {
-            detail::throw_error("QuickJS value used with a different context");
+            throw_error("QuickJS value used with a different context");
         }
     }
 

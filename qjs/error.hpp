@@ -2,12 +2,13 @@
 
 #include "common.inc.hpp"
 
+#include <source_location>
 #include <sstream>
 #include <string>
 
 namespace qjs {
 
-// Error payload for `qjs::result<T>` and `qjs::exception`.
+// Error payload for `qjs::result<T>`; also the base of `qjs::exception`.
 //
 // The `stacktrace` member (see common.inc.hpp) captures the call stack at the
 // point where the `error` value is aggregate-initialised, which — for the
@@ -17,16 +18,16 @@ namespace qjs {
 // an empty placeholder and stack frames are omitted from `to_string()`.
 struct error {
     std::string message;
-    std::source_location location;
-    qjs::stacktrace stacktrace{};
+    std::source_location at;
+    qjs::stacktrace stacktrace;
 
     // Human-readable one-shot dump: message + source location (+ stack trace
     // when the stacktrace capability is enabled at build time).
     [[nodiscard]] std::string to_string() const {
         std::ostringstream os;
         os << message
-           << " [" << location.file_name() << ':' << location.line()
-           << " in " << location.function_name() << "]";
+           << " [" << at.file_name() << ':' << at.line()
+           << " in " << at.function_name() << "]";
 #if QJS_CPP_WRAPPER_HAS_STACKTRACE
         os << '\n' << stacktrace;
 #endif
@@ -37,15 +38,44 @@ struct error {
 template <typename T>
 using result = std::expected<T, error>;
 
-class exception final : public std::runtime_error {
+class exception final : public error, public std::exception {
 public:
     explicit exception(error err)
-        : std::runtime_error(err.to_string()), error_(std::move(err)) {}
+        : error(std::move(err))
+    {
+        
+    }
 
-    [[nodiscard]] const error& info() const noexcept { return error_; }
+    [[nodiscard]] const char* what() const noexcept override {
+        return message.c_str();
+    }
+
+
 
 private:
-    error error_;
 };
+
+// Throw a qjs::exception with message, source location, and (when enabled)
+// a C++ stack trace that excludes throw_error itself.
+[[noreturn]] inline void throw_error(
+    const char* message,
+    std::source_location at = std::source_location::current())
+{
+    throw exception(error{std::move(message), at,{}});
+}
+
+[[noreturn]] inline void throw_error(
+    std::string_view message,
+    std::source_location at = std::source_location::current())
+{
+    throw exception(error{std::string{message}, at, {}});
+}
+
+[[noreturn]] inline void throw_error(
+    const std::string& message,
+    std::source_location at = std::source_location::current())
+{
+    throw exception(error{message, at, {}});
+}
 
 } // namespace qjs
