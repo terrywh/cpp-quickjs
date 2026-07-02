@@ -4,83 +4,38 @@
 #include "call_args.hpp"
 #include "runtime.hpp"
 
+#include <atomic>
+#include <cstdio>
 #include <sstream>
 
 namespace qjs {
 
-class context final {
+class context;
+
+class context_ref {
 public:
-    class scope final {
-    public:
-        explicit scope(context& ctx)
-            : context_(&ctx)
-        {
-            context::current_stack().push_back(&ctx);
-        }
-
-        scope(const scope&) = delete;
-        scope& operator=(const scope&) = delete;
-
-        ~scope()
-        {
-            auto& stack = context::current_stack();
-            if (stack.empty() || stack.back() != context_) {
-                std::terminate();
-            }
-            stack.pop_back();
-        }
-
-    private:
-        context* context_;
-    };
-
-    explicit context(runtime& rt)
-        : runtime_(&rt), context_(JS_NewContext(rt.raw()))
+    // Non-owning view over an existing JSContext. The raw context must have
+    // been created by qjs::context(runtime&) and must outlive this wrapper.
+    explicit context_ref(JSContext* ctx)
+        : runtime_(nullptr), context_(ctx), cpp_error_ctor_(nullptr)
     {
-        if (context_ == nullptr) {
-            detail::throw_error("JS_NewContext failed");
+        if (ctx == nullptr) {
+            detail::throw_error("QuickJS context pointer is null");
         }
-        JS_SetContextOpaque(context_, this);
+        auto* owner = static_cast<context_ref*>(JS_GetContextOpaque(ctx));
+        if (owner == nullptr) {
+            detail::throw_error("QuickJS context opaque pointer is not installed");
+        }
+        runtime_ = owner->runtime_;
+        cpp_error_ctor_ = owner->cpp_error_ctor_;
     }
 
-    context(const context&) = delete;
-    context& operator=(const context&) = delete;
-
-    context(context&&) = delete;
-    context& operator=(context&&) = delete;
-
-    ~context()
-    {
-        // Release cached JS handles that reference this context BEFORE the
-        // underlying JSContext is freed; otherwise their embedded ctx pointer
-        // would dangle when the value's destructor runs after JS_FreeContext.
-        cpp_error_ctor_ = value{};
-        if (context_ != nullptr) {
-            JS_SetContextOpaque(context_, nullptr);
-            JS_FreeContext(context_);
-        }
-    }
+    context_ref(const context_ref&) noexcept = default;
+    context_ref& operator=(const context_ref&) noexcept = default;
 
     [[nodiscard]] JSContext* raw() const noexcept { return context_; }
     [[nodiscard]] JSRuntime* raw_runtime() const noexcept { return runtime_->raw(); }
     [[nodiscard]] runtime& rt() const noexcept { return *runtime_; }
-
-    static context& from_raw(JSContext* ctx)
-    {
-        auto* self = static_cast<context*>(JS_GetContextOpaque(ctx));
-        if (self == nullptr) {
-            detail::throw_error("QuickJS context opaque pointer is not installed");
-        }
-        return *self;
-    }
-
-    static context& current()
-    {
-        if (current_stack().empty()) {
-            detail::throw_error("No qjs::context::scope is active on this thread");
-        }
-        return *current_stack().back();
-    }
 
     [[nodiscard]] value eval(
         std::string_view code,
@@ -165,44 +120,24 @@ public:
     // ---------------------------------------------------------------------
 
     // Build a JS closure value that wraps the given native_function.
-    [[nodiscard]] value make_function(std::string_view name, native_function fn, int length = 0)
+    [[nodiscard]] value make_function(native_function fn, int length = 0)
     {
-        auto* heap_function = new native_function(std::move(fn));
-        std::string owned_name{name};
-        value v(*this, JS_NewCClosure(
-            context_,
-            &native_trampoline,
-            owned_name.c_str(),
-            [](void* opaque) { delete static_cast<native_function*>(opaque); },
-            length,
-            0,
-            heap_function));
-        if (v.is_exception()) {
-            delete heap_function;
-            detail::throw_error(exception_string());
-        }
-        return v;
+        return make_function_impl(next_closure_name(), std::move(fn), length);
     }
 
     // Reflected free / static-member function.
     template <auto Fn>
     [[nodiscard]] value make_function();
 
-    template <auto Fn>
-    [[nodiscard]] value make_function(std::string_view js_name);
-
     // Register a C++ class and return its constructor value.
     template <typename T>
     [[nodiscard]] value make_class();
-
-    template <typename T>
-    [[nodiscard]] value make_class(std::string_view js_name);
 
     // Wrap a native C++ instance in a JS object. The four overloads mirror the
     // C++ ownership semantics that the JS object gains over the wrapped value:
     //   - const T&                : copy — JS owns an independent copy.
     //   - T&&                     : move — JS takes over the C++ instance.
-    //   - std::unique_ptr<T>      : move — JS becomes the unique owner.
+    //   - std::unique_ptr<T, D>   : move — JS becomes the unique owner.
     //   - std::shared_ptr<T>      : share — JS shares ownership with the caller.
     template <typename T>
         requires (!detail::is_smart_ptr_v<detail::remove_cvref_t<T>>)
@@ -216,8 +151,8 @@ public:
     template <typename T>
     [[nodiscard]] value make_object(std::shared_ptr<T> object);
 
-    template <typename T>
-    [[nodiscard]] value make_object(std::unique_ptr<T> object);
+    template <typename T, typename D>
+    [[nodiscard]] value make_object(std::unique_ptr<T, D> object);
 
     // Unified property setter: writes any value (closure / constructor / wrapped
     // object / plain data) as a named property on the global object.
@@ -269,42 +204,65 @@ private:
     template <typename T>
     friend class type_builder;
 
+    [[nodiscard]] value make_function_impl(std::string_view name, native_function fn, int length = 0)
+    {
+        auto* heap_function = new native_function(std::move(fn));
+        std::string owned_name{name};
+        value v(*this, JS_NewCClosure(
+            context_,
+            &native_trampoline,
+            owned_name.c_str(),
+            [](void* opaque) { delete static_cast<native_function*>(opaque); },
+            length,
+            0,
+            heap_function));
+        if (v.is_exception()) {
+            delete heap_function;
+            detail::throw_error(exception_string());
+        }
+        return v;
+    }
+
+    [[nodiscard]] static std::string next_closure_name()
+    {
+        static std::atomic_uint64_t counter{0};
+        std::uint64_t id = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+        char buffer[sizeof("closure_") + 16]{};
+        std::snprintf(buffer, sizeof(buffer), "closure_%06llu",
+            static_cast<unsigned long long>(id));
+        return buffer;
+    }
+
     struct holder_base {
         virtual ~holder_base() = default;
         virtual void* pointer() noexcept = 0;
     };
 
-    // JS owns an independent copy of the C++ instance (constructed via copy).
+    // JS owns a C++ instance stored inline in the holder, constructed either
+    // by copy (const T&) or by move (T&&).
     template <typename T>
-    struct copy_holder final : holder_base {
-        explicit copy_holder(const T& v) : value(v) {}
-        void* pointer() noexcept override { return &value; }
-        T value;
-    };
-
-    // JS takes over the C++ instance (constructed via move).
-    template <typename T>
-    struct owned_holder final : holder_base {
-        explicit owned_holder(T&& v) noexcept(std::is_nothrow_move_constructible_v<T>)
+    struct value_holder final : holder_base {
+        explicit value_holder(const T& v) : value(v) {}
+        explicit value_holder(T&& v) noexcept(std::is_nothrow_move_constructible_v<T>)
             : value(std::move(v)) {}
         void* pointer() noexcept override { return &value; }
         T value;
     };
 
     // JS becomes the unique owner of the pointee.
-    template <typename T>
+    template <typename Pointer>
     struct unique_holder final : holder_base {
-        explicit unique_holder(std::unique_ptr<T> v) noexcept : value(std::move(v)) {}
+        explicit unique_holder(Pointer v) noexcept : value(std::move(v)) {}
         void* pointer() noexcept override { return value.get(); }
-        std::unique_ptr<T> value;
+        Pointer value;
     };
 
     // JS shares ownership with the caller.
-    template <typename T>
+    template <typename Pointer>
     struct shared_holder final : holder_base {
-        explicit shared_holder(std::shared_ptr<T> v) noexcept : value(std::move(v)) {}
+        explicit shared_holder(Pointer v) noexcept : value(std::move(v)) {}
         void* pointer() noexcept override { return value.get(); }
-        std::shared_ptr<T> value;
+        Pointer value;
     };
 
     template <typename T>
@@ -365,7 +323,7 @@ private:
     static JSValue native_trampoline(JSContext* ctx, JSValueConst this_value, int argc, JSValueConst* argv, int, void* opaque)
     {
         try {
-            context& c = context::from_raw(ctx);
+            context_ref c(ctx);
             call_args args(c, this_value, argc, argv);
             value result = (*static_cast<native_function*>(opaque))(args);
             if (result.ctx() != ctx) {
@@ -373,20 +331,14 @@ private:
             }
             return result.release();
         } catch (const exception& err) {
-            return context::from_raw(ctx).throw_cpp_error(err.info());
+            return context_ref(ctx).throw_cpp_error(err.info());
         } catch (const std::exception& err) {
-            return context::from_raw(ctx).throw_cpp_error(
+            return context_ref(ctx).throw_cpp_error(
                 error{err.what(), std::source_location::current()});
         } catch (...) {
-            return context::from_raw(ctx).throw_cpp_error(
+            return context_ref(ctx).throw_cpp_error(
                 error{"unknown C++ exception", std::source_location::current()});
         }
-    }
-
-    static std::vector<context*>& current_stack()
-    {
-        thread_local std::vector<context*> stack;
-        return stack;
     }
 
     // Build a JS `CppError` instance (subclass of `Error`) that mirrors the
@@ -405,7 +357,7 @@ private:
             detail::throw_error(exception_string());
         }
         JSValue argv[1] = { msg_raw };
-        JSValue instance_raw = JS_CallConstructor(context_, cpp_error_ctor_.raw(), 1, argv);
+        JSValue instance_raw = JS_CallConstructor(context_, cpp_error_ctor_->raw(), 1, argv);
         JS_FreeValue(context_, msg_raw);
         if (JS_IsException(instance_raw)) {
             detail::throw_error(exception_string());
@@ -445,7 +397,7 @@ private:
     // `err instanceof CppError` in any scope.
     void ensure_cpp_error_ctor()
     {
-        if (!cpp_error_ctor_.is_undefined()) {
+        if (!cpp_error_ctor_->is_undefined()) {
             return;
         }
         // Note: eval'ing the class expression returns the constructor value;
@@ -468,16 +420,55 @@ private:
         if (ctor.is_exception()) {
             detail::throw_error(exception_string());
         }
-        cpp_error_ctor_ = std::move(ctor);
+        *cpp_error_ctor_ = std::move(ctor);
+    }
+
+protected:
+    context_ref(runtime* rt, JSContext* ctx, value* cpp_error_ctor) noexcept
+        : runtime_(rt), context_(ctx), cpp_error_ctor_(cpp_error_ctor)
+    {
     }
 
     runtime* runtime_;
     JSContext* context_;
+    value* cpp_error_ctor_;
+};
+
+class context final : public context_ref {
+public:
+    explicit context(runtime& rt)
+        : context_ref(&rt, JS_NewContext(rt.raw()), &cpp_error_ctor_storage_)
+    {
+        if (context_ == nullptr) {
+            detail::throw_error("JS_NewContext failed");
+        }
+        JS_SetContextOpaque(context_, static_cast<context_ref*>(this));
+    }
+
+    context(const context&) = delete;
+    context& operator=(const context&) = delete;
+
+    context(context&&) = delete;
+    context& operator=(context&&) = delete;
+
+    ~context()
+    {
+        // Release cached JS handles that reference this context BEFORE the
+        // underlying JSContext is freed; otherwise their embedded ctx pointer
+        // would dangle when the value's destructor runs after JS_FreeContext.
+        cpp_error_ctor_storage_ = value{};
+        if (context_ != nullptr) {
+            JS_SetContextOpaque(context_, nullptr);
+            JS_FreeContext(context_);
+        }
+    }
+
+private:
     // Lazily-populated cache of the JS `CppError` constructor used to bridge
     // C++ exceptions into the JS side (see ensure_cpp_error_ctor()). Kept
     // per-context so that multiple contexts sharing a runtime each own their
     // own CppError class object.
-    value cpp_error_ctor_{};
+    value cpp_error_ctor_storage_{};
 };
 
 } // namespace qjs

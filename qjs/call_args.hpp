@@ -6,14 +6,15 @@
 namespace qjs {
 
 class context;
+class context_ref;
 class value_view;
 class value;
 
 class call_args final {
 public:
-    call_args(context& ctx, JSValueConst this_value, int argc, JSValueConst* argv) noexcept;
+    call_args(context_ref& ctx, JSValueConst this_value, int argc, JSValueConst* argv) noexcept;
 
-    [[nodiscard]] context& ctx() const noexcept;
+    [[nodiscard]] context_ref& ctx() const noexcept;
     [[nodiscard]] value_view this_value() const noexcept { return this_; }
     [[nodiscard]] std::size_t size() const noexcept { return static_cast<std::size_t>(argc_); }
     [[nodiscard]] bool empty() const noexcept { return argc_ == 0; }
@@ -25,7 +26,7 @@ public:
     [[nodiscard]] value_view operator[](std::size_t index) const;
 
 private:
-    context* context_;
+    context_ref* context_;
     value_view this_;
     int argc_;
     JSValueConst* argv_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.inc.hpp"
+#include "context.hpp"
 #include "value.hpp"
 
 namespace qjs {
@@ -14,10 +15,23 @@ public:
 
     [[nodiscard]] operator value() const { return object_->get(name_); }
 
+    property_ref& operator=(const value& v)
+    {
+        object_->set(name_, v);
+        return *this;
+    }
+
+    property_ref& operator=(value&& v)
+    {
+        object_->set(name_, std::move(v));
+        return *this;
+    }
+
     template <typename T>
+        requires (!std::same_as<detail::remove_cvref_t<T>, value>)
     property_ref& operator=(T&& v)
     {
-        context& ctx = context::from_raw(object_->ctx());
+        context_ref ctx(object_->ctx());
         object_->set(name_, ctx.make_value(std::forward<T>(v)));
         return *this;
     }

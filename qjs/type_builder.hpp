@@ -38,10 +38,10 @@ consteval expose exposed_annotation(std::meta::info member)
 template <typename T>
 class type_builder final {
 private:
-    friend class context;
+    friend class context_ref;
     friend class value;
 
-    type_builder(context& ctx, std::string_view js_name)
+    type_builder(context_ref& ctx, std::string_view js_name)
         : context_(&ctx), js_name_(js_name), class_id_(ctx.ensure_class<T>(js_name))
     {
         prototype_ = ctx.make_object();
@@ -138,8 +138,8 @@ private:
         using C = typename traits::class_type;
         static_assert(std::same_as<C, T>, "method() member pointer must belong to the reflected type");
 
-        context* ctx = context_;
-        value fn = context_->make_function(name, [ctx](call_args args) -> value {
+        context_ref* ctx = context_;
+        value fn = context_->make_function_impl(name, [ctx](call_args args) -> value {
             T* object = ctx->template opaque_this<T>(args.this_value().raw());
             if (object == nullptr) {
                 detail::throw_error("JS method called with incompatible this object");
@@ -152,7 +152,7 @@ private:
     template <typename Member>
     void property(std::string_view name, Member T::*member)
     {
-        context* ctx = context_;
+        context_ref* ctx = context_;
         auto getter = [ctx, member](call_args args) -> value {
             T* object = ctx->template opaque_this<T>(args.this_value().raw());
             if (object == nullptr) {
@@ -161,7 +161,7 @@ private:
             return ctx->make_value(object->*member);
         };
 
-        value getter_value = context_->make_function(name, std::move(getter), 0);
+        value getter_value = context_->make_function_impl(name, std::move(getter), 0);
         std::string owned_name{name};
         JSAtom atom = JS_NewAtomLen(context_->raw(), owned_name.data(), owned_name.size());
         if (atom == JS_ATOM_NULL) {
@@ -181,14 +181,14 @@ private:
     }
 
     template <auto MemberFunction, typename Traits = detail::member_pointer_traits<decltype(MemberFunction)>>
-    static value invoke_member(context& ctx, T& object, call_args args)
+    static value invoke_member(context_ref& ctx, T& object, call_args args)
     {
         using args_tuple = typename Traits::args_tuple;
         return invoke_member_impl<MemberFunction>(ctx, object, args, std::make_index_sequence<std::tuple_size_v<args_tuple>>{});
     }
 
     template <auto MemberFunction, std::size_t... I>
-    static value invoke_member_impl(context& ctx, T& object, call_args args, std::index_sequence<I...>)
+    static value invoke_member_impl(context_ref& ctx, T& object, call_args args, std::index_sequence<I...>)
     {
         using traits = detail::member_pointer_traits<decltype(MemberFunction)>;
         using args_tuple = typename traits::args_tuple;
@@ -209,20 +209,20 @@ private:
     static JSValue constructor_trampoline(JSContext* ctx, JSValueConst, int, JSValueConst*)
     {
         try {
-            context& c = context::from_raw(ctx);
+            context_ref c(ctx);
             return c.make_object(std::make_unique<T>()).release();
         } catch (const exception& err) {
-            return context::from_raw(ctx).throw_cpp_error(err.info());
+            return context_ref(ctx).throw_cpp_error(err.info());
         } catch (const std::exception& err) {
-            return context::from_raw(ctx).throw_cpp_error(
+            return context_ref(ctx).throw_cpp_error(
                 error{err.what(), std::source_location::current()});
         } catch (...) {
-            return context::from_raw(ctx).throw_cpp_error(
+            return context_ref(ctx).throw_cpp_error(
                 error{"unknown C++ exception", std::source_location::current()});
         }
     }
 
-    context* context_;
+    context_ref* context_;
     std::string js_name_;
     JSClassID class_id_;
     value prototype_;
@@ -233,65 +233,59 @@ private:
 // -----------------------------------------------------------------------------
 
 template <typename T>
-inline value context::make_class(std::string_view js_name)
+inline value context_ref::make_class()
 {
-    return type_builder<T>(*this, js_name).build();
-}
-
-template <typename T>
-inline value context::make_class()
-{
-    return make_class<T>(std::meta::identifier_of(^^T));
+    return type_builder<T>(*this, std::meta::identifier_of(^^T)).build();
 }
 
 template <typename T>
     requires (!detail::is_smart_ptr_v<detail::remove_cvref_t<T>>)
-inline value context::make_object(const T& object)
+inline value context_ref::make_object(const T& object)
 {
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
         detail::throw_error(exception_string());
     }
-    JS_SetOpaque(v.raw(), new copy_holder<T>(object));
+    JS_SetOpaque(v.raw(), new value_holder<T>(object));
     return v;
 }
 
 template <typename T>
     requires (!std::is_reference_v<T> &&
               !detail::is_smart_ptr_v<detail::remove_cvref_t<T>>)
-inline value context::make_object(T&& object)
+inline value context_ref::make_object(T&& object)
 {
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
         detail::throw_error(exception_string());
     }
-    JS_SetOpaque(v.raw(), new owned_holder<T>(std::move(object)));
+    JS_SetOpaque(v.raw(), new value_holder<T>(std::move(object)));
     return v;
 }
 
 template <typename T>
-inline value context::make_object(std::shared_ptr<T> object)
+inline value context_ref::make_object(std::shared_ptr<T> object)
 {
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
         detail::throw_error(exception_string());
     }
-    JS_SetOpaque(v.raw(), new shared_holder<T>(std::move(object)));
+    JS_SetOpaque(v.raw(), new shared_holder<std::shared_ptr<T>>(std::move(object)));
     return v;
 }
 
-template <typename T>
-inline value context::make_object(std::unique_ptr<T> object)
+template <typename T, typename D>
+inline value context_ref::make_object(std::unique_ptr<T, D> object)
 {
     auto id = ensure_class<T>(typeid(T).name());
     value v(*this, JS_NewObjectClass(context_, id));
     if (v.is_exception()) {
         detail::throw_error(exception_string());
     }
-    JS_SetOpaque(v.raw(), new unique_holder<T>(std::move(object)));
+    JS_SetOpaque(v.raw(), new unique_holder<std::unique_ptr<T, D>>(std::move(object)));
     return v;
 }
 
@@ -302,7 +296,7 @@ inline value context::make_object(std::unique_ptr<T> object)
 namespace detail {
 
 template <auto Fn, std::size_t... I>
-inline value invoke_free_function_impl(context& ctx, call_args args, std::index_sequence<I...>)
+inline value invoke_free_function_impl(context_ref& ctx, call_args args, std::index_sequence<I...>)
 {
     using traits = function_pointer_traits<decltype(Fn)>;
     using args_tuple = typename traits::args_tuple;
@@ -321,7 +315,7 @@ inline value invoke_free_function_impl(context& ctx, call_args args, std::index_
 }
 
 template <auto Fn>
-inline value invoke_free_function(context& ctx, call_args args)
+inline value invoke_free_function(context_ref& ctx, call_args args)
 {
     using traits = function_pointer_traits<decltype(Fn)>;
     using args_tuple = typename traits::args_tuple;
@@ -332,28 +326,23 @@ inline value invoke_free_function(context& ctx, call_args args)
 } // namespace detail
 
 template <auto Fn>
-inline value context::make_function(std::string_view js_name)
+inline value context_ref::make_function()
 {
+    static_assert(
+        QJS_CPP_WRAPPER_STATIC_REFLECTION_VERSION >= 1,
+        "context::make_function<Fn>() without a name argument requires standardized C++26 static reflection support.");
     static_assert(
         std::is_pointer_v<decltype(Fn)> && std::is_function_v<std::remove_pointer_t<decltype(Fn)>>,
         "context::make_function<Fn>() requires a free function or static member function pointer");
 
     using traits = detail::function_pointer_traits<decltype(Fn)>;
-    context* self = this;
-    return make_function(js_name,
+    context_ref* self = this;
+    std::string name = std::string(std::meta::identifier_of(std::meta::reflect_function(*Fn)));
+    return make_function_impl(name,
         [self](call_args args) -> value {
             return detail::invoke_free_function<Fn>(*self, args);
         },
         static_cast<int>(traits::arity));
-}
-
-template <auto Fn>
-inline value context::make_function()
-{
-    static_assert(
-        QJS_CPP_WRAPPER_STATIC_REFLECTION_VERSION >= 1,
-        "context::make_function<Fn>() without a name argument requires standardized C++26 static reflection support.");
-    return make_function<Fn>(std::meta::identifier_of(std::meta::reflect_function(*Fn)));
 }
 
 // -----------------------------------------------------------------------------
@@ -361,7 +350,7 @@ inline value context::make_function()
 // -----------------------------------------------------------------------------
 
 template <typename T>
-inline value context::make_value(T&& v)
+inline value context_ref::make_value(T&& v)
 {
     using U = detail::remove_cvref_t<T>;
     if constexpr (std::same_as<U, value>) {

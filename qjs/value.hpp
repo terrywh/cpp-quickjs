@@ -6,6 +6,7 @@
 namespace qjs {
 
 class context;
+class context_ref;
 class property_ref;
 class call_args;
 
@@ -54,7 +55,7 @@ public:
 
     // Wrap an already-constructed raw JSValue (takes ownership). All other
     // ways to build a JS value flow through context::make_*() factories.
-    value(context& ctx, JSValue raw) noexcept;
+    value(context_ref& ctx, JSValue raw) noexcept;
 
     value(const value& other)
         : ctx_(other.ctx_)

@@ -1,41 +1,4 @@
-# Build directories
-build/
-cmake-build-*/
-out/
-
-# CMake generated files
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CTestTestfile.cmake
-Makefile
-compile_commands.json
-
-# Compiled output
-*.o
-*.obj
-*.exe
-*.out
-*.a
-*.lib
-*.so
-*.so.*
-*.dylib
-*.dll
-
-# IDE & Editor
+.cache/
 .vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# Dependencies
-external/
-third_party/
-
-# Debug
-*.pdb
-*.ilk
+build/
+/compile_commands.json
