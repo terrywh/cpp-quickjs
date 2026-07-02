@@ -25,7 +25,7 @@ inline value_view call_args::operator[](std::size_t index) const
 }
 
 inline value::value(context_ref& ctx, JSValue raw) noexcept
-    : ctx_(ctx.raw()), value_(raw)
+    : ctx_(ctx.raw()), val_(raw)
 {
 }
 
@@ -33,7 +33,7 @@ inline value value::get(std::string_view name) const
 {
     std::string owned_name{name};
     context_ref ctx(ctx_);
-    value v(ctx, JS_GetPropertyStr(ctx_, value_, owned_name.c_str()));
+    value v(ctx, JS_GetPropertyStr(ctx_, val_, owned_name.c_str()));
     if (v.is_exception()) {
         throw_error(ctx.exception_string());
     }
@@ -43,7 +43,7 @@ inline value value::get(std::string_view name) const
 inline void value::set(const char* name, value v)
 {
     context_ref ctx(ctx_);
-    if (JS_SetPropertyStr(ctx_, value_, name, v.release()) < 0) {
+    if (JS_SetPropertyStr(ctx_, val_, name, v.release()) < 0) {
         throw_error(ctx.exception_string());
     }
 }
@@ -75,7 +75,7 @@ inline value value::call(value_view this_value, Args&&... args) const
         raw_args.push_back(arg.raw());
     }
 
-    value result(ctx, JS_Call(ctx_, value_, this_value.raw(), static_cast<int>(raw_args.size()), raw_args.data()));
+    value result(ctx, JS_Call(ctx_, val_, this_value.raw(), static_cast<int>(raw_args.size()), raw_args.data()));
     if (result.is_exception()) {
         throw_error(ctx.exception_string());
     }
@@ -98,7 +98,7 @@ inline value value::invoke(std::string_view name, Args&&... args) const
 inline bool value::equals_loose(value_view other) const
 {
     ensure_same_context(other);
-    int r = JS_IsEqual(ctx_, value_, other.raw());
+    int r = JS_IsEqual(ctx_, val_, other.raw());
     if (r < 0) {
         throw_error(context_ref(ctx_).exception_string());
     }
@@ -108,7 +108,7 @@ inline bool value::equals_loose(value_view other) const
 inline bool value::same_value(value_view other) const
 {
     ensure_same_context(other);
-    return JS_IsSameValue(ctx_, value_, other.raw());
+    return JS_IsSameValue(ctx_, val_, other.raw());
 }
 
 template <typename T>

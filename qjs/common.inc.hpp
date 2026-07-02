@@ -44,6 +44,7 @@
 #include <optional>
 #include <source_location>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>

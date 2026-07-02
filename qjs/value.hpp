@@ -32,7 +32,13 @@ public:
 
     [[nodiscard]] std::string to_string() const
     {
-        return detail::copy_c_string(ctx_, JS_ToCString(ctx_, value_));
+        const char* text = JS_ToCString(ctx_, value_);
+        if (text == nullptr) {
+            return {};
+        }
+        std::string out{text};
+        JS_FreeCString(ctx_, text);
+        return out;
     }
 
     template <typename T>
@@ -49,7 +55,7 @@ public:
     // nothing, so destruction is a no-op; assign / move-in a real value
     // once a context is available.
     value() noexcept
-        : ctx_(nullptr), value_(JS_UNDEFINED)
+        : ctx_(nullptr), val_(JS_UNDEFINED)
     {
     }
 
@@ -59,7 +65,7 @@ public:
 
     value(const value& other)
         : ctx_(other.ctx_)
-        , value_(other.ctx_ == nullptr ? JS_UNDEFINED : JS_DupValue(other.ctx_, other.value_))
+        , val_(other.ctx_ == nullptr ? JS_UNDEFINED : JS_DupValue(other.ctx_, other.val_))
     {
     }
 
@@ -68,14 +74,14 @@ public:
         if (this != &other) {
             reset();
             ctx_ = other.ctx_;
-            value_ = other.ctx_ == nullptr ? JS_UNDEFINED : JS_DupValue(other.ctx_, other.value_);
+            val_ = other.ctx_ == nullptr ? JS_UNDEFINED : JS_DupValue(other.ctx_, other.val_);
         }
         return *this;
     }
 
     value(value&& other) noexcept
         : ctx_(std::exchange(other.ctx_, nullptr))
-        , value_(std::exchange(other.value_, JS_UNDEFINED))
+        , val_(std::exchange(other.val_, JS_UNDEFINED))
     {
     }
 
@@ -84,7 +90,7 @@ public:
         if (this != &other) {
             reset();
             ctx_ = std::exchange(other.ctx_, nullptr);
-            value_ = std::exchange(other.value_, JS_UNDEFINED);
+            val_ = std::exchange(other.val_, JS_UNDEFINED);
         }
         return *this;
     }
@@ -92,12 +98,12 @@ public:
     ~value() { reset(); }
 
     [[nodiscard]] JSContext* ctx() const noexcept { return ctx_; }
-    [[nodiscard]] JSValue raw() const noexcept { return value_; }
-    [[nodiscard]] value_view view() const noexcept { return value_view(ctx_, value_); }
+    [[nodiscard]] JSValue raw() const noexcept { return val_; }
+    [[nodiscard]] value_view view() const noexcept { return value_view(ctx_, val_); }
     [[nodiscard]] JSValue release() noexcept
     {
         ctx_ = nullptr;
-        return std::exchange(value_, JS_UNDEFINED);
+        return std::exchange(val_, JS_UNDEFINED);
     }
 
     [[nodiscard]] bool is_number() const noexcept { return view().is_number(); }
@@ -140,16 +146,16 @@ public:
     friend bool operator==(const value& lhs, const value& rhs)
     {
         lhs.ensure_same_context(rhs.view());
-        return JS_IsStrictEqual(lhs.ctx_, lhs.value_, rhs.value_);
+        return JS_IsStrictEqual(lhs.ctx_, lhs.val_, rhs.val_);
     }
 
 private:
     void reset() noexcept
     {
         if (ctx_ != nullptr) {
-            JS_FreeValue(ctx_, value_);
+            JS_FreeValue(ctx_, val_);
             ctx_ = nullptr;
-            value_ = JS_UNDEFINED;
+            val_ = JS_UNDEFINED;
         }
     }
 
@@ -161,7 +167,7 @@ private:
     }
 
     JSContext* ctx_{};
-    JSValue value_{JS_UNDEFINED};
+    JSValue val_{JS_UNDEFINED};
 };
 
 } // namespace qjs

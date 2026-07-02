@@ -2,10 +2,6 @@
 
 #include "common.inc.hpp"
 
-#include <source_location>
-#include <sstream>
-#include <string>
-
 namespace qjs {
 
 // Error payload for `qjs::result<T>`; also the base of `qjs::exception`.

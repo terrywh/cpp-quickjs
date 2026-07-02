@@ -18,16 +18,6 @@ namespace detail {
 template <typename>
 inline constexpr bool dependent_false = false;
 
-inline std::string copy_c_string(JSContext* ctx, const char* text)
-{
-    if (text == nullptr) {
-        return {};
-    }
-    std::string out{text};
-    JS_FreeCString(ctx, text);
-    return out;
-}
-
 template <typename T>
 struct member_pointer_traits;
 

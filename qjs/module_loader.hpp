@@ -2,8 +2,6 @@
 
 #include "common.inc.hpp"
 
-
-
 namespace qjs {
 
 // Thin C++ wrapper around QuickJS' module-loader callbacks. The trampolines
