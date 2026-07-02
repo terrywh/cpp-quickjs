@@ -276,9 +276,22 @@ int main()
             unique_custom_deletes == 1 &&
             shared_kept_alive_by_caller && shared_custom_deletes == 1;
 
+        // quickjs-libc standard modules are opt-in per context.
+        qjs::runtime libc_rt;
+        qjs::context libc_ctx(libc_rt);
+        libc_ctx.enable(qjs::standard_module::std);
+        (void)libc_ctx.eval(
+            "import * as std from 'qjs:std'; globalThis.__qjs_std = std;",
+            "<std-import>",
+            JS_EVAL_TYPE_MODULE);
+        bool std_module_available =
+            libc_ctx.eval("typeof __qjs_std.evalScript === 'function'").as<bool>();
+        bool helpers_available = libc_ctx.eval("typeof print === 'function'").as<bool>();
+
         if (!basic_value_checks || !naming_checks || !function_checks ||
             !namespace_checks || !explicit_set_checks || !primitive_checks ||
-            !cpp_error_checks || !reflection_checks || !smart_pointer_checks) {
+            !cpp_error_checks || !reflection_checks || !smart_pointer_checks ||
+            !std_module_available || !helpers_available) {
             std::cerr << "QuickJS wrapper demo produced unexpected results\n";
             return 1;
         }

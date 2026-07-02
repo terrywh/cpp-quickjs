@@ -2,6 +2,8 @@
 
 #include "common.inc.hpp"
 #include "detail.hpp"
+#include "error.hpp"
+#include "module_loader.hpp"
 
 namespace qjs {
 
@@ -13,6 +15,9 @@ public:
         if (runtime_ == nullptr) {
             throw_error("JS_NewRuntime failed");
         }
+
+        js_std_init_handlers(runtime_);
+        install_default_module_loader();
     }
 
     runtime(const runtime&) = delete;
@@ -41,9 +46,20 @@ public:
     void run_gc() noexcept { JS_RunGC(runtime_); }
 
 private:
+    void install_default_module_loader() noexcept
+    {
+        JS_SetModuleLoaderFunc2(
+            runtime_,
+            nullptr,
+            &module_loader::load_trampoline,
+            &module_loader::check_attributes_trampoline,
+            nullptr);
+    }
+
     void reset() noexcept
     {
         if (runtime_ != nullptr) {
+            js_std_free_handlers(runtime_);
             JS_FreeRuntime(runtime_);
             runtime_ = nullptr;
         }

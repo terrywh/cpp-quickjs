@@ -3,6 +3,7 @@
 #include "common.inc.hpp"
 #include "call_args.hpp"
 #include "runtime.hpp"
+#include "standard_module.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -426,13 +427,32 @@ protected:
 
 class context final : public context_ref {
 public:
-    explicit context(runtime& rt)
+    explicit context(runtime& rt, int argc = 0, char** argv = nullptr)
         : context_ref(&rt, JS_NewContext(rt.raw()), &cpp_error_ctor_storage_)
     {
         if (context_ == nullptr) {
             throw_error("JS_NewContext failed");
         }
         JS_SetContextOpaque(context_, static_cast<context_ref*>(this));
+        js_std_add_helpers(context_, argc, argv);
+    }
+
+    // Opt-in quickjs-libc standard modules for this context.
+    void enable(standard_module module)
+    {
+        if ((enabled_modules_ & module.bit_) != 0u) {
+            return;
+        }
+
+        if (module.init_(context_, module.name_) == nullptr) {
+            throw_error(std::string{"failed to register standard module: "} + module.name_);
+        }
+        enabled_modules_ |= module.bit_;
+    }
+
+    [[nodiscard]] bool enabled(standard_module module) const noexcept
+    {
+        return (enabled_modules_ & module.bit_) != 0u;
     }
 
     context(const context&) = delete;
@@ -459,6 +479,7 @@ private:
     // per-context so that multiple contexts sharing a runtime each own their
     // own NativeError class object.
     value cpp_error_ctor_storage_{};
+    unsigned enabled_modules_{};
 };
 
 } // namespace qjs

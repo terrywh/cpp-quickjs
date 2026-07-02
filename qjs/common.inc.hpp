@@ -73,6 +73,7 @@
 // ---- QuickJS C API ---------------------------------------------------------
 extern "C" {
 #include <quickjs.h>
+#include <quickjs-libc.h>
 }
 
 // ---- Optional Boost.Stacktrace integration ---------------------------------
